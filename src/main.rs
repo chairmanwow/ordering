@@ -17,12 +17,12 @@ impl BadSpinlock {
     }
 
     fn lock(&self) {
-        while self.0.compare_exchange_weak(false, true, Relaxed, Relaxed).is_err() {
-            println!("yield");
+        while self.0.load(Relaxed) {
             // so that loom doesn't freak out
             thread::yield_now();
         }
-        println!("go");
+
+        self.0.store(true, Relaxed);
     }
 
     fn unlock(&self) {
