@@ -2,31 +2,37 @@ use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Acquire;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::Ordering::Release;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
 
 use loom::sync::atomic::AtomicBool;
 use loom::sync::atomic::AtomicUsize;
 use loom::thread;
 
-#[derive(Default, Clone)]
-struct BadSpinlock(Arc<AtomicBool>);
+#[derive(Clone)]
+struct BadSpinlock {
+    lock: Arc<AtomicBool>,
+    val: *mut u8,
+}
 
 impl BadSpinlock {
     fn new() -> Self {
-        Self::default()
+        Self { lock: Default::default(), val: Box::leak(Box::new(0u8)) }
     }
 
-    fn lock(&self) {
-        while self.0.load(Relaxed) {
+    fn lock(&self) -> *mut u8 {
+        while self.lock.load(Relaxed) {
             // so that loom doesn't freak out
             thread::yield_now();
         }
 
-        self.0.store(true, Relaxed);
+        self.lock.store(true, Relaxed);
+
+        self.val
     }
 
     fn unlock(&self) {
-        self.0.store(false, Relaxed);
+        self.lock.store(false, Relaxed);
     }
 }
 
@@ -45,13 +51,13 @@ fn main() {
 
         let lock = BadSpinlock::new();
 
-        let val: *mut usize = &mut 0usize;
-
-        let a = spinlock_test(&lock, val);
-        let b = spinlock_test(&lock, val);
+        let a = spinlock_test(&lock);
+        let b = spinlock_test(&lock);
         let _ = a.join();
         let _ = b.join();
-        assert_eq!(unsafe { *val }, 2);
+        let val = unsafe { *lock.lock() };
+        assert_eq!(val, 2);
+        lock.unlock();
 
         // let data = Default::default();
         // let is_ready = Arc::new(AtomicBool::new(false));
@@ -93,12 +99,12 @@ fn classic_example_storer(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread:
     })
 }
 
-fn spinlock_test(lock: &BadSpinlock, val: *mut usize) -> thread::JoinHandle<()> {
+fn spinlock_test(lock: &BadSpinlock) -> thread::JoinHandle<()> {
     let lock = lock.clone();
 
     thread::spawn(move || {
-        lock.lock();
-        unsafe { *val += 1 };
+        let val = lock.lock();
+        unsafe { *val += 1 }
         lock.unlock();
     })
 }
