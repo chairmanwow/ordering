@@ -17,8 +17,9 @@ impl BadSpinlock {
     }
 
     fn lock(&self) {
-        while self.0.compare_exchange_weak(false, true, Relaxed, Relaxed).is_err() {
-            // no-op
+        if self.0.swap(true, Relaxed) {
+            // so that loom doesn't freak out
+            thread::yield_now();
         }
     }
 
@@ -29,38 +30,92 @@ impl BadSpinlock {
 
 fn main() {
     loom::model(|| {
-        let once = Arc::new(AtomicBool::new(false));
-        let value = Arc::new(AtomicUsize::new(0));
-
-        let a = loom_thread_test(&value, &once);
-        let b = loom_thread_test(&value, &once);
-
-        let _ = a.join();
-        let _ = b.join();
-
-        assert_eq!(value.load(Relaxed), 1);
+        // let once = Arc::new(AtomicBool::new(false));
+        // let value = Arc::new(AtomicUsize::new(0));
+        //
+        // let a = loom_thread_test(&value, &once);
+        // let b = loom_thread_test(&value, &once);
+        //
+        // let _ = a.join();
+        // let _ = b.join();
+        //
+        // assert_eq!(value.load(Relaxed), 1);
 
         let lock = BadSpinlock::new();
 
-        let mut val = 0u8;
-        let val_ref: *mut u8 = &mut val;
+        let val: *mut usize = &mut 0usize;
 
-        spinlock_test(&lock, val_ref);
-        spinlock_test(&lock, val_ref);
+        let (a, b) = spinlock_test(&lock, val, 6);
+        let _ = a.join();
+        let _ = b.join();
+        assert_eq!(unsafe { *val }, 6);
 
-        // should panic
-        assert_eq!(unsafe { *val_ref }, 2);
+        // let data = Default::default();
+        // let is_ready = Arc::new(AtomicBool::new(false));
+        //
+        // let a = bad_thread_write(&data, &is_ready);
+        // let b = bad_thread_read(&data, &is_ready);
+        //
+        // let _ = a.join();
+        // let _ = b.join();
+
+        // let x = Default::default();
+        // let y = Default::default();
+        // let a = classic_example_loader(&x, &y);
+        // let b = classic_example_storer(&x, &y);
+        //
+        // let _ = a.join();
+        // let _ = b.join();
     });
 }
 
-fn spinlock_test(lock: &BadSpinlock, val: *mut u8) -> thread::JoinHandle<()> {
-    let lock = lock.clone();
+fn classic_example_loader(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread::JoinHandle<()> {
+    let a = a.clone();
+    let b = b.clone();
 
     thread::spawn(move || {
-        lock.lock();
-        unsafe { *val += 1 }
-        lock.unlock();
+        a.store(1, Relaxed);
+        b.store(2, Relaxed);
     })
+}
+fn classic_example_storer(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread::JoinHandle<()> {
+    let a = a.clone();
+    let b = b.clone();
+
+    thread::spawn(move || {
+        let b = b.load(Relaxed);
+        let a = a.load(Relaxed);
+
+        assert!((a == 0 && b == 0) || (a == 1 && b == 0) || (a == 1 && b == 2))
+    })
+}
+
+fn spinlock_test(
+    lock: &BadSpinlock,
+    val: *mut usize,
+    iters: usize,
+) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
+    let lock_a = lock.clone();
+    let lock_b = lock.clone();
+
+    let a = thread::spawn(move || {
+        for _ in 0..iters / 2 {
+            lock_a.lock();
+            let new = unsafe { *val } + 1;
+            unsafe { *val = new };
+            lock_a.unlock();
+        }
+    });
+
+    let b = thread::spawn(move || {
+        for _ in 0..iters / 2 {
+            lock_b.lock();
+            unsafe { *val += 1 };
+            lock_b.unlock();
+        }
+    });
+
+    (a, b)
 }
 
 fn loom_thread_test(value: &Arc<AtomicUsize>, once: &Arc<AtomicBool>) -> thread::JoinHandle<()> {
@@ -71,5 +126,28 @@ fn loom_thread_test(value: &Arc<AtomicUsize>, once: &Arc<AtomicBool>) -> thread:
         if let Ok(_) = once.compare_exchange(false, true, Relaxed, Relaxed) {
             value.fetch_add(1, Relaxed);
         }
+    })
+}
+
+fn bad_thread_write(data: &Arc<AtomicUsize>, is_ready: &Arc<AtomicBool>) -> thread::JoinHandle<()> {
+    let is_ready = is_ready.clone();
+    let data = data.clone();
+
+    thread::spawn(move || {
+        data.store(123, Relaxed);
+        is_ready.store(true, Relaxed);
+    })
+}
+
+fn bad_thread_read(data: &Arc<AtomicUsize>, is_ready: &Arc<AtomicBool>) -> thread::JoinHandle<()> {
+    let is_ready = is_ready.clone();
+    let data = data.clone();
+
+    thread::spawn(move || {
+        while !is_ready.load(Relaxed) {
+            thread::yield_now()
+        }
+
+        assert_eq!(data.load(Relaxed), 123);
     })
 }
