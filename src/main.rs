@@ -17,10 +17,12 @@ impl BadSpinlock {
     }
 
     fn lock(&self) {
-        if self.0.swap(true, Relaxed) {
+        while self.0.compare_exchange_weak(false, true, Relaxed, Relaxed).is_err() {
+            println!("yield");
             // so that loom doesn't freak out
             thread::yield_now();
         }
+        println!("go");
     }
 
     fn unlock(&self) {
@@ -45,10 +47,11 @@ fn main() {
 
         let val: *mut usize = &mut 0usize;
 
-        let (a, b) = spinlock_test(&lock, val, 6);
+        let a = spinlock_test(&lock, val);
+        let b = spinlock_test(&lock, val);
         let _ = a.join();
         let _ = b.join();
-        assert_eq!(unsafe { *val }, 6);
+        assert_eq!(unsafe { *val }, 2);
 
         // let data = Default::default();
         // let is_ready = Arc::new(AtomicBool::new(false));
@@ -90,32 +93,14 @@ fn classic_example_storer(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread:
     })
 }
 
-fn spinlock_test(
-    lock: &BadSpinlock,
-    val: *mut usize,
-    iters: usize,
-) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
-    let lock_a = lock.clone();
-    let lock_b = lock.clone();
+fn spinlock_test(lock: &BadSpinlock, val: *mut usize) -> thread::JoinHandle<()> {
+    let lock = lock.clone();
 
-    let a = thread::spawn(move || {
-        for _ in 0..iters / 2 {
-            lock_a.lock();
-            let new = unsafe { *val } + 1;
-            unsafe { *val = new };
-            lock_a.unlock();
-        }
-    });
-
-    let b = thread::spawn(move || {
-        for _ in 0..iters / 2 {
-            lock_b.lock();
-            unsafe { *val += 1 };
-            lock_b.unlock();
-        }
-    });
-
-    (a, b)
+    thread::spawn(move || {
+        lock.lock();
+        unsafe { *val += 1 };
+        lock.unlock();
+    })
 }
 
 fn loom_thread_test(value: &Arc<AtomicUsize>, once: &Arc<AtomicBool>) -> thread::JoinHandle<()> {
