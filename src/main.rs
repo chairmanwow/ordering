@@ -70,15 +70,18 @@ fn main() {
 
         // let x = Default::default();
         // let y = Default::default();
-        // let a = classic_example_loader(&x, &y);
-        // let b = classic_example_storer(&x, &y);
+        // let a = bad_classic_example_loader(&x, &y);
+        // let b = bad_classic_example_storer(&x, &y);
         //
         // let _ = a.join();
         // let _ = b.join();
     });
 }
 
-fn classic_example_loader(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread::JoinHandle<()> {
+fn bad_classic_example_loader(
+    a: &Arc<AtomicUsize>,
+    b: &Arc<AtomicUsize>,
+) -> thread::JoinHandle<()> {
     let a = a.clone();
     let b = b.clone();
 
@@ -87,7 +90,10 @@ fn classic_example_loader(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread:
         b.store(2, Relaxed);
     })
 }
-fn classic_example_storer(a: &Arc<AtomicUsize>, b: &Arc<AtomicUsize>) -> thread::JoinHandle<()> {
+fn bad_classic_example_storer(
+    a: &Arc<AtomicUsize>,
+    b: &Arc<AtomicUsize>,
+) -> thread::JoinHandle<()> {
     let a = a.clone();
     let b = b.clone();
 
