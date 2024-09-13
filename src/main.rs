@@ -7,31 +7,28 @@ use loom::thread;
 
 fn main() {
     loom::model(|| {
-        let once_bool = Arc::new(AtomicBool::new(false));
+        let once = Arc::new(AtomicBool::new(false));
         let value = Arc::new(AtomicUsize::new(0));
 
-        let once_bool_ = once_bool.clone();
-        let value_ = value.clone();
+        let a = loom_thread_test(&value, &once);
+        let b = loom_thread_test(&value, &once);
+        let c = loom_thread_test(&value, &once);
 
-        thread::spawn(move || {
-            if let Ok(_) =
-                once_bool.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                fetch_and_test(&value);
-            }
-        });
+        let _ = a.join();
+        let _ = b.join();
+        let _ = c.join();
 
-        thread::spawn(move || {
-            if let Ok(_) =
-                once_bool_.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                fetch_and_test(&value_);
-            }
-        });
+        assert_eq!(value.load(Ordering::Relaxed), 1);
     });
 }
 
-fn fetch_and_test(v: &AtomicUsize) {
-    v.fetch_add(1, Ordering::Relaxed);
-    assert_eq!(v.load(Ordering::Relaxed), 1);
+fn loom_thread_test(value: &Arc<AtomicUsize>, once: &Arc<AtomicBool>) -> thread::JoinHandle<()> {
+    let value = value.clone();
+    let once = once.clone();
+
+    thread::spawn(move || {
+        if let Ok(_) = once.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed) {
+            value.fetch_add(1, Ordering::Relaxed);
+        }
+    })
 }
